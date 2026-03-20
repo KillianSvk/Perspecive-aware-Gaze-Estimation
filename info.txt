@@ -1,0 +1,5 @@
+MPIIFaceGaze:
+already normalized face patches
+    Undistorts the full frame using cameraMatrix + distCoeffs
+    Virtually rotates the camera to face the subject head-on (using head pose)
+    Crops and warps the face region into a standardized patch
