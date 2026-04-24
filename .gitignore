@@ -1,3 +1,5 @@
 .venv/*
+.claude/*
 data_sets/*
+papers/*
 todo.txt
