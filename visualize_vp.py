@@ -1,16 +1,3 @@
-"""
-Visualization of vanishing points from MPIIFaceGaze calibration data.
-
-Approach adapted from:
-  Kocur et al., "Traffic Camera Calibration via Vehicle Vanishing Point Detection"
-  https://github.com/kocurvik/deep_vp
-
-Three-panel figure:
-  1. Synthetic full-frame canvas with fan lines converging to each VP
-  2. Diamond-space scatter (bounded VP representation from the paper)
-  3. Sample face patch from the dataset
-"""
-
 import cv2
 import numpy as np
 import scipy.io
@@ -50,11 +37,13 @@ def diamond_coords_from_original(p, d=1.0):
 
 
 def vp_to_diamond(vp, scale=1.0):
-    """Return the rotated diamond coordinate for a VP (normalized by scale)."""
+    """Return the diamond coordinate for a VP (normalized by scale).
+
+    Matches Eq. (8) of Dubská & Herout: the bounded region is the diamond
+    {|u|+|v| <= 1} with corners at (±1, 0) and (0, ±1).
+    """
     vp_scaled = np.array(vp) * scale
-    dc = diamond_coords_from_original(vp_scaled, d=1.0)
-    R = np.array([[1., -1.], [1., 1.]])
-    return R @ dc
+    return diamond_coords_from_original(vp_scaled, d=1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -190,15 +179,15 @@ def focal_length_from_vanishing_points(vps: dict, cx: float, cy: float) -> dict:
 # Main visualization
 # ---------------------------------------------------------------------------
 
-def visualize_vanishing_points(participant: str = 'p00',
-                               sample_image: str = 'day01/0005.jpg',
-                               save_path: str = 'vp_visualization.png'):
+def visualize_vanishing_points(participant: str, sample_image: str):
     participant_dir = DATASET_ROOT / participant
     mat_cam, mat_mon = load_calibration(participant_dir)
 
     K = mat_cam['cameraMatrix']
-    w, h = int(K[0, 2] * 2), int(K[1, 2] * 2)
-    scale = 1.0 / max(w, h)          # normalise VP coords for diamond space
+    cx, cy = float(K[0, 2]), float(K[1, 2])
+    w, h = int(cx * 2), int(cy * 2)
+    # Place image at origin spanning ~[-1, +1]^2 (paper's mu = 1).
+    scale = 1.0 / max(cx, cy, w - cx, h - cy)
 
     vps = compute_vanishing_points(mat_cam, mat_mon)
 
@@ -207,17 +196,17 @@ def visualize_vanishing_points(participant: str = 'p00',
     # ------------------------------------------------------------------ #
     canvas = np.full((h, w, 3), 235, dtype=np.uint8)
 
-    for name, vp in vps.items():
-        draw_vp_fan(canvas, vp, VP_COLORS_BGR[name], w, h, n_lines=10)
+    DISPLAY_VP = 'normal'
+    vp_display = vps[DISPLAY_VP]
+    draw_vp_fan(canvas, vp_display, VP_COLORS_BGR[DISPLAY_VP], w, h, n_lines=10)
 
-    for name, vp in vps.items():
-        if 0 <= vp[0] <= w and 0 <= vp[1] <= h:
-            pt = (int(vp[0]), int(vp[1]))
-            cv2.circle(canvas, pt, 11, (0, 0, 0), -1)
-            cv2.circle(canvas, pt,  8, VP_COLORS_BGR[name], -1)
-            cv2.putText(canvas, f'VP_{name[0].upper()}',
-                        (pt[0] + 13, pt[1] - 4),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+    if 0 <= vp_display[0] <= w and 0 <= vp_display[1] <= h:
+        pt = (int(vp_display[0]), int(vp_display[1]))
+        cv2.circle(canvas, pt, 11, (0, 0, 0), -1)
+        cv2.circle(canvas, pt,  8, VP_COLORS_BGR[DISPLAY_VP], -1)
+        cv2.putText(canvas, f'VP_{DISPLAY_VP[0].upper()}',
+                    (pt[0] + 13, pt[1] - 4),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
 
     cv2.rectangle(canvas, (0, 0), (w - 1, h - 1), (60, 60, 60), 2)
 
@@ -225,10 +214,10 @@ def visualize_vanishing_points(participant: str = 'p00',
     # Panel 2 – diamond-space scatter                                     #
     # ------------------------------------------------------------------ #
     diamond_pts = {}
-    for name, vp in vps.items():
-        dc = vp_to_diamond(vp, scale=scale)
-        if np.isfinite(dc).all() and np.abs(dc).max() < 4.5:
-            diamond_pts[name] = dc
+    vp_centered = np.array(vp_display) - np.array([cx, cy])
+    dc = vp_to_diamond(vp_centered, scale=scale)
+    if np.isfinite(dc).all() and np.abs(dc).max() < 4.5:
+        diamond_pts[DISPLAY_VP] = dc
 
     # ------------------------------------------------------------------ #
     # Panel 3 – face patch                                                #
@@ -251,32 +240,31 @@ def visualize_vanishing_points(participant: str = 'p00',
     ax_frame.set_xlabel('x (px)')
     ax_frame.set_ylabel('y (px)')
 
-    legend_handles = []
-    for name, color in VP_COLORS_MPL.items():
-        vp = vps[name]
-        in_frame = 0 <= vp[0] <= w and 0 <= vp[1] <= h
-        label = f'VP_{name[0].upper()}  ({vp[0]:.0f}, {vp[1]:.0f} px)'
-        if not in_frame:
-            label += '  [off-screen]'
-        legend_handles.append(mlines.Line2D([], [], color=color, linewidth=2, label=label))
-    ax_frame.legend(handles=legend_handles, loc='lower left', fontsize=8)
+    in_frame_disp = 0 <= vp_display[0] <= w and 0 <= vp_display[1] <= h
+    label = f'VP_{DISPLAY_VP[0].upper()}  ({vp_display[0]:.0f}, {vp_display[1]:.0f} px)'
+    if not in_frame_disp:
+        label += '  [off-screen]'
+    ax_frame.legend(
+        handles=[mlines.Line2D([], [], color=VP_COLORS_MPL[DISPLAY_VP], linewidth=2, label=label)],
+        loc='lower left', fontsize=8,
+    )
 
     # --- diamond panel ---
-    ax_diamond.set_xlim(-2.5, 2.5)
-    ax_diamond.set_ylim(-2.5, 2.5)
+    ax_diamond.set_xlim(-1.5, 1.5)
+    ax_diamond.set_ylim(-1.5, 1.5)
     ax_diamond.set_aspect('equal')
     ax_diamond.set_title('Diamond Space', fontsize=11)
     ax_diamond.set_xlabel('u')
     ax_diamond.set_ylabel('v')
 
-    # Draw diamond boundary
+    # Diamond boundary {|u|+|v| <= 1} as in the paper.
     d_corners = np.array([[1, 0], [0, 1], [-1, 0], [0, -1], [1, 0]])
     ax_diamond.plot(d_corners[:, 0], d_corners[:, 1], 'k--', lw=1, alpha=0.6, label='VP domain')
     ax_diamond.axhline(0, color='gray', lw=0.5, alpha=0.4)
     ax_diamond.axvline(0, color='gray', lw=0.5, alpha=0.4)
 
     for name, dc in diamond_pts.items():
-        ax_diamond.plot(dc[0], dc[1], 'o', color=VP_COLORS_MPL[name], markersize=11,
+        ax_diamond.plot(dc[0], dc[1], 'o', color=VP_COLORS_MPL[name], markersize=5,
                         zorder=5, label=f'VP_{name[0].upper()}')
         ax_diamond.annotate(f'VP_{name[0].upper()}', dc, fontsize=8,
                             color=VP_COLORS_MPL[name],
@@ -325,4 +313,4 @@ def visualize_vanishing_points(participant: str = 'p00',
 
 
 if __name__ == '__main__':
-    visualize_vanishing_points(participant='p01', sample_image='day01/0005.jpg')
+    visualize_vanishing_points(participant='p00', sample_image='day01/0005.jpg')
